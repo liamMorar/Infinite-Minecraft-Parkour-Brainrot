@@ -1,0 +1,150 @@
+﻿<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title></title>
+</head>
+<body>
+    <canvas width="700" height="500px"></canvas>
+</body>
+<script>
+    var canvas = document.getElementsByTagName('canvas')[0];
+    cancel = false;
+    paused = false;
+
+    function minecraftParkour() {
+        var ctx = canvas.getContext('2d');
+        var W = canvas.width, H = canvas.height;
+        var fov = 90 * Math.PI / 180;
+        var focal = (W / 2) / Math.tan(fov / 2);
+
+        let cam = { x: 0, y: 1.7, z: 0, yaw: 0, pitch: -0.2 };
+        var blocks = [];
+        blocks.push({ x: 0, y: 0, z: 0 });
+
+        function genNext() {
+            var last = blocks[blocks.length - 1];
+            var angle = (Math.random() * 2 - 1) * Math.PI / 4;
+            var dist = 3//(2 + (Math.random() * 2));
+            var dx = Math.round(Math.sin(angle) * dist);
+            var dz = Math.round(Math.cos(angle) * dist);
+            var dy = (Math.floor(Math.random() * 2) - 0.5);
+            blocks.push({ x: last.x + dx, y: last.y + dy, z: last.z + dz });
+        }
+
+        for (let i = 0; i < 5; i++) genNext();
+
+        let step = 0, t = 0;
+        function lerp(a, b, t) { return a + (b - a) * t; }
+
+        function project(pt) {
+            let dx = pt.x - cam.x;
+            let dy = pt.y - cam.y;
+            let dz = pt.z - cam.z;
+            var sx = Math.cos(cam.yaw) * dx - Math.sin(cam.yaw) * dz;
+            let sz = Math.sin(cam.yaw) * dx + Math.cos(cam.yaw) * dz;
+            var sy = Math.cos(cam.pitch) * dy - Math.sin(cam.pitch) * sz;
+            sz = Math.sin(cam.pitch) * dy + Math.cos(cam.pitch) * sz;
+            if (sz < 0.5) return null;
+            return { x: (sx * focal / sz) + W / 2, y: (-sy * focal / sz) + H / 2, z: sz };
+        }
+
+        function drawCube(pos, size = 1, baseColor = { r: 150, g: 75, b: 0 }) {
+            var c = pos, s = size;
+            var corners = [
+                { x: c.x, y: c.y, z: c.z }, { x: c.x + s, y: c.y, z: c.z },
+                { x: c.x + s, y: c.y + s, z: c.z }, { x: c.x, y: c.y + s, z: c.z },
+                { x: c.x, y: c.y, z: c.z + s }, { x: c.x + s, y: c.y, z: c.z + s },
+                { x: c.x + s, y: c.y + s, z: c.z + s }, { x: c.x, y: c.y + s, z: c.z + s }
+            ];
+            var proj = corners.map(project);
+            if (proj.some(p => p === null)) return;
+
+            var faces = [
+                { idx: [0, 1, 2, 3], normal: [0, 0, -1] },
+                { idx: [4, 5, 6, 7], normal: [0, 0, 1] },
+                { idx: [0, 1, 5, 4], normal: [0, -1, 0] },
+                { idx: [3, 2, 6, 7], normal: [0, 1, 0] },
+                { idx: [1, 2, 6, 5], normal: [1, 0, 0] },
+                { idx: [0, 3, 7, 4], normal: [-1, 0, 0] }
+            ];
+
+            var light = [0.5, 1, -0.75];
+            var mag = Math.hypot(...light);
+            var lightDir = light.map(v => v / mag);
+
+            faces.forEach(fac => {
+                fac.zAvg = fac.idx.reduce((sum, i) => sum + proj[i].z, 0) / 4;
+                let b = fac.normal.reduce((sum, val, i) => sum + val * lightDir[i], 0);
+                b = Math.max(0, b);
+                fac.color = `rgb(${Math.floor(baseColor.r * b)}, ${Math.floor(baseColor.g * b)}, ${Math.floor(baseColor.b * b)})`;
+            });
+            faces.sort((a, b) => b.zAvg - a.zAvg);
+
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#000';
+            faces.forEach(fac => {
+                ctx.beginPath();
+                ctx.fillStyle = fac.color;
+                ctx.moveTo(proj[fac.idx[0]].x, proj[fac.idx[0]].y);
+                fac.idx.forEach((vi, i) => { if (i > 0) ctx.lineTo(proj[vi].x, proj[vi].y); });
+                ctx.closePath();
+                ctx.fill();
+                //ctx.stroke();
+            });
+        }
+
+        var targetYaw = 0;
+        var targetPitch = 0;
+
+        function loop() {
+            if (cancel) return;
+            if (!paused) {
+                ctx.fillStyle = '#87ceeb';
+                ctx.fillRect(0, 0, W, H);
+
+                var sorted = blocks.slice().sort((a, b) => {
+                    var da = (a.x - cam.x) ** 2 + (a.y - cam.y) ** 2 + (a.z - cam.z) ** 2;
+                    var db = (b.x - cam.x) ** 2 + (b.y - cam.y) ** 2 + (b.z - cam.z) ** 2;
+                    return db - da;
+                });
+                sorted.forEach(b => drawCube(b));
+
+                if (step + 50 > blocks.length) genNext();
+
+                if (step < blocks.length - 1) {
+                    var A = blocks[step], B = blocks[step + 1];
+                    t++; var pct = Math.min(t / 100, 1);
+                    var ax = A.x + 0.5, az = A.z + 0.5, bx = B.x + 0.5, bz = B.z + 0.5;
+                    cam.yaw += (targetYaw - cam.yaw) * 0.02;
+                    cam.pitch += (targetPitch - cam.pitch) * 0.1
+                    cam.x = lerp(ax, bx, pct); cam.z = lerp(az, bz, pct);
+                    var baseY = lerp(A.y + 1.7, B.y + 1.7, pct);
+                    cam.y = baseY + Math.sin(pct * Math.PI) * 1.2;
+                    if (pct == 0.1) {
+                        targetYaw = Math.atan2(blocks[step + 2].x - blocks[step + 1].x, blocks[step + 2].z - blocks[step + 1].z);
+                        targetPitch = -0.2 + ((blocks[step + 1].y - blocks[step].y) * 0.05);
+                    }
+                    if (pct >= 1) {
+                        step++;
+                        t = 0;
+                        if (blocks.length > 30) {
+                            blocks.shift();
+                            step--;
+                        }
+                    }
+                }
+
+                ctx.strokeStyle = '#000';
+                ctx.beginPath();
+                ctx.moveTo(W / 2 - 10, H / 2); ctx.lineTo(W / 2 + 10, H / 2);
+                ctx.moveTo(W / 2, H / 2 - 10); ctx.lineTo(W / 2, H / 2 + 10);
+                ctx.stroke();
+            }
+            requestAnimationFrame(loop);
+        }
+        loop();
+    }
+
+    minecraftParkour();
+</script>
+
+</html>
